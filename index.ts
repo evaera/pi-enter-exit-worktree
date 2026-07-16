@@ -467,7 +467,6 @@ async function enterWorktree(
   let branch: string;
   let worktreeHead: string;
   if (mode === "new") {
-    await assertClean(source.root, "Source checkout");
     const defaultRef = await chooseDefaultBranchRef(source.root, ctx);
     worktreeHead = (await git(["rev-parse", `${defaultRef}^{commit}`], source.root)).trim();
     branch = name;
@@ -489,7 +488,7 @@ async function enterWorktree(
     : undefined;
 
   const relativeCwd = relative(source.root, sourceCwd);
-  const preparedRef = backupRef();
+  const preparedRef = mode === "enter" ? backupRef() : undefined;
   const enterSignature = await statusSignature(source.root);
   const enterFingerprint = await checkoutFingerprint(source.root);
   const record: HandoffRecord = {
@@ -514,7 +513,9 @@ async function enterWorktree(
   let switchAttempted = false;
   let switchCancelled = false;
   try {
-    snapshot = await snapshotChanges(source.root, `pi enter-worktree ${name}`, preparedRef);
+    snapshot = mode === "enter"
+      ? await snapshotChanges(source.root, `pi enter-worktree ${name}`, preparedRef!)
+      : { signature: enterSignature, fingerprint: enterFingerprint };
     record.enterBackupRef = snapshot.ref;
     record.enterFingerprint = snapshot.fingerprint;
     saveRecord(record);
@@ -530,7 +531,7 @@ async function enterWorktree(
     } else {
       await git(["worktree", "add", destinationRoot, branch], source.root);
     }
-    await applySnapshot(destinationRoot, snapshot);
+    if (mode === "enter") await applySnapshot(destinationRoot, snapshot);
 
     record.phase = "active";
     saveRecord(record);
@@ -560,7 +561,7 @@ async function enterWorktree(
     }
     removeSessionFile(targetSessionFile);
     try {
-      const durableRef = await optionalRef(source.root, preparedRef);
+      const durableRef = preparedRef ? await optionalRef(source.root, preparedRef) : undefined;
       const recoverableSnapshot = durableRef
         ? { ref: preparedRef, signature: enterSignature, fingerprint: record.enterFingerprint ?? snapshot.fingerprint }
         : snapshot;

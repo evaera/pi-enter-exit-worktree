@@ -196,7 +196,7 @@ describe("enter and exit worktree", () => {
     expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("/.exited/");
   });
 
-  it("creates a new branch from origin HEAD and flops the source checkout to it on exit", async () => {
+  it("creates from origin HEAD without touching a dirty source and flops back on exit", async () => {
     const temp = mkdtempSync(join(tmpdir(), "pi-new-worktree-"));
     const agent = join(temp, "agent");
     const repo = join(temp, "sample-repo");
@@ -214,6 +214,12 @@ describe("enter and exit worktree", () => {
     git(repo, "reset", "--hard", localMain);
     git(repo, "update-ref", "refs/remotes/origin/main", remoteMain);
     git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    writeFileSync(join(repo, "tracked.txt"), "source staged\n");
+    git(repo, "add", "tracked.txt");
+    writeFileSync(join(repo, "tracked.txt"), "source staged\nsource unstaged\n");
+    writeFileSync(join(repo, "source-untracked.txt"), "source untracked\n");
+    writeFileSync(join(repo, "source.ignored"), "source ignored\n");
+    const sourceStatus = git(repo, "status", "--porcelain=v1", "--untracked-files=all");
 
     const sourceSession = SessionManager.create(repo, join(temp, "source-sessions"));
     sourceSession.appendMessage({ role: "user", content: "start clean", timestamp: Date.now() });
@@ -243,8 +249,20 @@ describe("enter and exit worktree", () => {
     expect(record.mode).toBe("new");
     expect(git(record.destinationRoot, "branch", "--show-current").trim()).toBe("fresh-task");
     expect(readFileSync(join(record.destinationRoot, "default-only.txt"), "utf8")).toBe("from origin default\n");
+    expect(readFileSync(join(record.destinationRoot, "tracked.txt"), "utf8")).toBe("base\n");
+    expect(existsSync(join(record.destinationRoot, "source-untracked.txt"))).toBe(false);
+    expect(existsSync(join(record.destinationRoot, "source.ignored"))).toBe(false);
     expect(git(record.destinationRoot, "status", "--porcelain")).toBe("");
     expect(git(repo, "branch", "--show-current").trim()).toBe("main");
+    expect(git(repo, "status", "--porcelain=v1", "--untracked-files=all")).toBe(sourceStatus);
+    expect(git(repo, "show", ":tracked.txt")).toBe("source staged\n");
+    expect(readFileSync(join(repo, "tracked.txt"), "utf8")).toBe("source staged\nsource unstaged\n");
+    expect(readFileSync(join(repo, "source-untracked.txt"), "utf8")).toBe("source untracked\n");
+    expect(readFileSync(join(repo, "source.ignored"), "utf8")).toBe("source ignored\n");
+
+    git(repo, "reset", "--hard", "HEAD");
+    rmSync(join(repo, "source-untracked.txt"));
+    rmSync(join(repo, "source.ignored"));
     git(repo, "switch", "-c", "unrelated-source-branch");
 
     writeFileSync(join(record.destinationRoot, "tracked.txt"), "fresh change\n");
@@ -265,6 +283,12 @@ describe("enter and exit worktree", () => {
     initializeRepo(repo);
     git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
     git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    writeFileSync(join(repo, "tracked.txt"), "failed staged\n");
+    git(repo, "add", "tracked.txt");
+    writeFileSync(join(repo, "tracked.txt"), "failed staged\nfailed unstaged\n");
+    writeFileSync(join(repo, "failed-untracked.txt"), "preserve me\n");
+    writeFileSync(join(repo, "failed.ignored"), "preserve ignored\n");
+    const sourceStatus = git(repo, "status", "--porcelain=v1", "--untracked-files=all");
 
     const session = SessionManager.create(repo, join(temp, "sessions"));
     session.appendMessage({ role: "user", content: "new task", timestamp: Date.now() });
@@ -296,6 +320,11 @@ describe("enter and exit worktree", () => {
     expect(git(repo, "worktree", "list", "--porcelain")).toContain("/.exited/failed-task-");
     expect(git(repo, "branch", "--list", "failed-task").trim()).toBe("");
     expect(git(repo, "branch", "--show-current").trim()).toBe("main");
+    expect(git(repo, "status", "--porcelain=v1", "--untracked-files=all")).toBe(sourceStatus);
+    expect(git(repo, "show", ":tracked.txt")).toBe("failed staged\n");
+    expect(readFileSync(join(repo, "tracked.txt"), "utf8")).toBe("failed staged\nfailed unstaged\n");
+    expect(readFileSync(join(repo, "failed-untracked.txt"), "utf8")).toBe("preserve me\n");
+    expect(readFileSync(join(repo, "failed.ignored"), "utf8")).toBe("preserve ignored\n");
   });
 
   it("refuses to overwrite ignored source files when flopping branches", async () => {

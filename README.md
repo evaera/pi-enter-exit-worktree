@@ -47,7 +47,7 @@ The source checkout is left clean and detached at its previous commit so the bra
 
 ### Creating a new worktree
 
-`/new-worktree` creates a new branch named after the worktree, based on the repository's default branch, without transferring anything from the source checkout. The source checkout must be clean.
+`/new-worktree` creates a new branch named after the worktree, based on the repository's default branch, without transferring anything from the source checkout. Staged, unstaged, untracked, and ignored files remain untouched in the source checkout.
 
 The default branch is discovered from symbolic `origin/HEAD`. When that ref is unavailable or ambiguous, Pi asks you to select a local or remote branch instead of assuming `main` or `master`.
 
@@ -78,7 +78,7 @@ Create `~/.pi/agent/pi-enter-exit-worktree.json`:
 
 ## Safety
 
-- The source checkout must be clean when exiting or creating a new worktree.
+- The source checkout may be dirty when creating a new worktree, but it must be clean before exiting one.
 - Exit deliberately changes the source checkout to the managed worktree's branch.
 - Branch switches refuse to overwrite ignored files.
 - Ignored files are not transferred. Exited worktrees are archived rather than deleted.

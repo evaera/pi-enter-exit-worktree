@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Allow `/new-worktree` to leave staged, unstaged, untracked, and ignored source changes untouched.
+
 ## 0.1.0
 
 - Add `/enter-worktree` for moving the current branch, working state, and Pi session into a managed worktree.
