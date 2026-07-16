@@ -1,0 +1,8 @@
+# Changelog
+
+## 0.1.0
+
+- Add `/enter-worktree` for moving the current branch, working state, and Pi session into a managed worktree.
+- Add `/new-worktree` for creating a clean branch and worktree from the repository default branch.
+- Add `/exit-worktree` for moving the worktree branch, working state, and Pi session back to the source checkout.
+- Add reusable archived worktrees, configurable storage, and recovery safeguards.
