@@ -2,7 +2,7 @@
 
 A focused Git worktree manager for [Pi](https://github.com/earendil-works/pi) that moves the live session with your working state.
 
-`pi-enter-exit-worktree` moves branches and uncommitted changes between a primary checkout and managed worktrees. It also supports starting a clean task from the repository's default branch.
+`pi-enter-exit-worktree` moves branches and uncommitted changes between a primary checkout and managed worktrees. It also supports starting clean tasks from the repository's default branch, with multiple managed worktrees active from the same source checkout.
 
 ## Requirements
 
@@ -51,9 +51,11 @@ The source checkout is left clean and detached at its previous commit so the bra
 
 The default branch is discovered from symbolic `origin/HEAD`. When that ref is unavailable or ambiguous, Pi asks you to select a local or remote branch instead of assuming `main` or `master`.
 
+Multiple active worktrees may share the same source checkout. Handoffs are serialized while they run, and an interrupted handoff that needs recovery blocks sibling operations until it is resolved.
+
 ### Exiting a worktree
 
-`/exit-worktree` requires the source checkout to be clean, but its current branch does not matter. The extension:
+`/exit-worktree` requires the source checkout to be clean, but its current branch does not matter. When several managed worktrees share a source, exit them one at a time and clean or commit any restored changes before exiting the next. The extension:
 
 1. Snapshots changes from the managed worktree.
 2. Detaches the managed worktree to release its branch.
@@ -78,7 +80,9 @@ Create `~/.pi/agent/pi-enter-exit-worktree.json`:
 
 ## Safety
 
+- Multiple active managed worktrees may share one source checkout.
 - The source checkout may be dirty when creating a new worktree, but it must be clean before exiting one.
+- Sibling handoffs are blocked while another handoff for the same source has unfinished recovery state.
 - Exit deliberately changes the source checkout to the managed worktree's branch.
 - Branch switches refuse to overwrite ignored files.
 - Ignored files are not transferred. Exited worktrees are archived rather than deleted.

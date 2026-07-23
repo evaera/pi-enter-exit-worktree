@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow multiple active managed worktrees to share the same source checkout.
+- Preserve recovery isolation by blocking sibling operations while a handoff is unfinished.
 - Allow `/new-worktree` to leave staged, unstaged, untracked, and ignored source changes untouched.
 
 ## 0.1.0

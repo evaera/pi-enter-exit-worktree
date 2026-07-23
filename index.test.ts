@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import extension, { loadConfig, loadState, sanitizeWorktreeName } from "./index.js";
+import extension, { loadConfig, loadState, sanitizeWorktreeName, saveState } from "./index.js";
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalWorktreeRoot = process.env.PI_ENTER_EXIT_WORKTREE_ROOT;
@@ -51,6 +51,29 @@ function makePiHarness() {
   } as any;
   extension(pi);
   return { commands, tools, sent };
+}
+
+function makeSession(cwd: string, sessionDir: string, prompt: string): SessionManager {
+  const session = SessionManager.create(cwd, sessionDir);
+  session.appendMessage({ role: "user", content: prompt, timestamp: Date.now() });
+  session.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "ready" }],
+    api: "openai-responses",
+    provider: "openai",
+    model: "test",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
+  return session;
 }
 
 function makeContext(manager: SessionManager) {
@@ -272,6 +295,115 @@ describe("enter and exit worktree", () => {
     expect(git(repo, "branch", "--show-current").trim()).toBe("fresh-task");
     expect(readFileSync(join(repo, "tracked.txt"), "utf8")).toBe("fresh change\n");
     expect(git(repo, "status", "--porcelain").trim()).toBe("M tracked.txt");
+  });
+
+  it("supports multiple active new worktrees from one dirty source and sequential exits", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "pi-multiple-new-worktrees-"));
+    const agent = join(temp, "agent");
+    const repo = join(temp, "sample-repo");
+    process.env.PI_CODING_AGENT_DIR = agent;
+    process.env.PI_ENTER_EXIT_WORKTREE_ROOT = join(temp, "worktrees");
+    initializeRepo(repo);
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    writeFileSync(join(repo, "tracked.txt"), "source changes\n");
+    writeFileSync(join(repo, "source-untracked.txt"), "preserve me\n");
+    const sourceStatus = git(repo, "status", "--porcelain=v1", "--untracked-files=all");
+
+    const firstSession = makeSession(repo, join(temp, "first-sessions"), "first task");
+    const secondSession = makeSession(repo, join(temp, "second-sessions"), "second task");
+
+    const harness = makePiHarness();
+    const firstContext = makeContext(firstSession);
+    const secondContext = makeContext(secondSession);
+    await harness.commands.get("new-worktree")!("first-task", firstContext);
+    await harness.commands.get("new-worktree")!("second-task", secondContext);
+
+    const records = Object.values(loadState(agent).records);
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.branch).sort()).toEqual(["first-task", "second-task"]);
+    expect(records.every((record) => record.sourceRoot === realpathSync(repo))).toBe(true);
+    expect(records.every((record) => record.mode === "new" && record.phase === "active")).toBe(true);
+    expect(git(repo, "status", "--porcelain=v1", "--untracked-files=all")).toBe(sourceStatus);
+
+    git(repo, "reset", "--hard", "HEAD");
+    rmSync(join(repo, "source-untracked.txt"));
+    const firstRecord = records.find((record) => record.branch === "first-task")!;
+    const secondRecord = records.find((record) => record.branch === "second-task")!;
+    await harness.commands.get("exit-worktree")!(
+      "",
+      makeContext(SessionManager.open(firstContext.switchedSessionFile!)),
+    );
+    expect(git(repo, "branch", "--show-current").trim()).toBe("first-task");
+    expect(loadState(agent).records[firstRecord.destinationRoot]).toBeUndefined();
+    expect(loadState(agent).records[secondRecord.destinationRoot]).toBeDefined();
+
+    await harness.commands.get("exit-worktree")!(
+      "",
+      makeContext(SessionManager.open(secondContext.switchedSessionFile!)),
+    );
+    expect(git(repo, "branch", "--show-current").trim()).toBe("second-task");
+    expect(Object.keys(loadState(agent).records)).toHaveLength(0);
+  });
+
+  it("allows active new and enter handoffs to share a source checkout", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "pi-mixed-worktrees-"));
+    const agent = join(temp, "agent");
+    const repo = join(temp, "sample-repo");
+    process.env.PI_CODING_AGENT_DIR = agent;
+    process.env.PI_ENTER_EXIT_WORKTREE_ROOT = join(temp, "worktrees");
+    initializeRepo(repo);
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+
+    const newSession = makeSession(repo, join(temp, "new-sessions"), "new task");
+    const enterSession = makeSession(repo, join(temp, "enter-sessions"), "existing task");
+
+    const harness = makePiHarness();
+    await harness.commands.get("new-worktree")!("new-task", makeContext(newSession));
+    await harness.commands.get("enter-worktree")!("existing-task", makeContext(enterSession));
+
+    const records = Object.values(loadState(agent).records);
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.mode).sort()).toEqual(["enter", "new"]);
+    expect(records.every((record) => record.phase === "active")).toBe(true);
+    expect(git(repo, "branch", "--show-current").trim()).toBe("");
+  });
+
+  it("blocks sibling operations while another handoff needs recovery", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "pi-transitional-sibling-"));
+    const agent = join(temp, "agent");
+    const repo = join(temp, "sample-repo");
+    process.env.PI_CODING_AGENT_DIR = agent;
+    process.env.PI_ENTER_EXIT_WORKTREE_ROOT = join(temp, "worktrees");
+    initializeRepo(repo);
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+
+    const firstSession = makeSession(repo, join(temp, "first-sessions"), "first task");
+    const secondSession = makeSession(repo, join(temp, "second-sessions"), "second task");
+    const thirdSession = makeSession(repo, join(temp, "third-sessions"), "third task");
+
+    const harness = makePiHarness();
+    const firstContext = makeContext(firstSession);
+    const secondContext = makeContext(secondSession);
+    await harness.commands.get("new-worktree")!("first-task", firstContext);
+    await harness.commands.get("new-worktree")!("second-task", secondContext);
+    const state = loadState(agent);
+    const firstRecord = Object.values(state.records).find((record) => record.branch === "first-task")!;
+    firstRecord.phase = "entering";
+    saveState(state, agent);
+
+    await expect(harness.commands.get("new-worktree")!("third-task", makeContext(thirdSession))).rejects.toThrow(
+      "unfinished entering handoff",
+    );
+    await expect(
+      harness.commands.get("exit-worktree")!(
+        "",
+        makeContext(SessionManager.open(secondContext.switchedSessionFile!)),
+      ),
+    ).rejects.toThrow("unfinished entering handoff");
+    expect(Object.keys(loadState(agent).records)).toHaveLength(2);
   });
 
   it("archives a created worktree when session relocation fails", async () => {

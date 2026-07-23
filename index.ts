@@ -444,12 +444,16 @@ async function enterWorktree(
   const releaseOperation = acquireOperationLock(source.commonDir);
   try {
   const state = loadState();
-  const pending = Object.values(state.records).find((record) => record.sourceRoot === source.root);
   if (state.records[source.root]) {
     throw new Error("This checkout is already managed by worktree handoff. Use /exit-worktree first.");
   }
-  if (pending) {
-    throw new Error(`This checkout already has a ${pending.phase} handoff at ${pending.destinationRoot}`);
+  const transitionalSibling = Object.values(state.records).find(
+    (record) => record.sourceRoot === source.root && record.phase !== "active",
+  );
+  if (transitionalSibling) {
+    throw new Error(
+      `This checkout has an unfinished ${transitionalSibling.phase} handoff at ${transitionalSibling.destinationRoot}`,
+    );
   }
 
   let rawName = args.trim();
@@ -629,6 +633,17 @@ async function exitWorktree(
   }
   if (record.phase === "entering") {
     throw new Error("The enter operation did not finish. Recovery metadata is preserved in the state file.");
+  }
+  const transitionalSibling = Object.values(state.records).find(
+    (candidate) =>
+      candidate.destinationRoot !== record.destinationRoot &&
+      candidate.sourceRoot === record.sourceRoot &&
+      candidate.phase !== "active",
+  );
+  if (transitionalSibling) {
+    throw new Error(
+      `The source checkout has an unfinished ${transitionalSibling.phase} handoff at ${transitionalSibling.destinationRoot}`,
+    );
   }
 
   const source = await repoInfo(record.sourceRoot);
